@@ -1,64 +1,53 @@
-from flask import request, jsonify
-import requests
-from .database import connection
-import re, os
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad
-from base64 import b64encode
+import re
+import os
 import json
-import datetime
 import time
+from flask import request, jsonify
+from .database import connection
+from base64 import b64encode
+from .hashing.AES import AES
+from .discord.notfy import Notfy
+from dotenv import load_dotenv
 
-def encrypt_message(message):
-    key = b'secretbloxsecretbloxsecretblox12'
-    cipher = AES.new(key, AES.MODE_CBC)
-    ct_bytes = cipher.encrypt(pad(message.encode(), AES.block_size))
-    iv = b64encode(cipher.iv).decode('utf-8')
-    ct = b64encode(ct_bytes).decode('utf-8')
-    encrypted_data = json.dumps({'iv':iv, 'data':ct})
-    return encrypted_data
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', 'sb.env'))
+sb_updating = os.getenv('SECRET_BLOX_FORCE_UPDATE')
 
 def check_token():
+    
+    if sb_updating == True:
+        response = {"status": "no", "reason": "updating"}
+        encrypted_response = AES(json.dumps(response)).__str__()
+        return jsonify({"secret-blox-data": json.loads(encrypted_response)})
+    
+
     raw_token = request.form.get('token', '')
     token = re.sub(r'[^a-zA-Z0-9]', '', raw_token)
-    if token:
-        try:
-            connection.ping(reconnect=True) 
-            with connection.cursor() as cursor:
-                sql = "SELECT * FROM clients WHERE `key` = %s"
-                cursor.execute(sql, [token])  
-                result = cursor.fetchone()
-                if result:
-                    session_id = b64encode((token + "-" + str(int(time.time())) + "-" + os.urandom(10).hex()).encode()).decode()
-                    insert_sql = "INSERT INTO session (session_id, client_key) VALUES (%s, %s)"
-                    cursor.execute(insert_sql, [session_id, token])  
-                    connection.commit()
-                    response = {"status": "ok", "sessionid": session_id}
-                    notify_endpoint(f"Session ID: `{session_id}`\nClient Token: `{token}`")
-                else:
-                    response = {"status": "no", "reason": "Invalid token"}
-        except Exception as e:
-            response = {"status": "no", "reason": str(e)}
-    else:
+    if not token:
         response = {"status": "no", "reason": "No token"}
+        encrypted_response = AES(json.dumps(response)).__str__()
+        return jsonify({"secret-blox-data": json.loads(encrypted_response)})
     
-    encrypted_response = encrypt_message(json.dumps(response))
-    return jsonify({"secret-blox-data": encrypted_response})
+    try:
+        connection.ping(reconnect=True)
+        with connection.cursor() as cursor:
+            sql = "SELECT * FROM clients WHERE `key` = %s"
+            cursor.execute(sql, [token])
+            result = cursor.fetchone()
+            if not result:
+                response = {"status": "no", "reason": "Invalid token"}
+                encrypted_response = AES(json.dumps(response)).__str__()
+                return jsonify({"secret-blox-data": json.loads(encrypted_response)})
+            
+            session_id = b64encode((f"{token}-{int(time.time())}-{os.urandom(10).hex()}").encode()).decode()
+            insert_sql = "INSERT INTO session (session_id, client_key) VALUES (%s, %s)"
+            cursor.execute(insert_sql, [session_id, token])
+            connection.commit()
+            response = {"status": "ok", "sessionid": session_id}
+            Notfy(f"Session ID: `{session_id}`\nClient Token: `{token}`")
+    except Exception as e:
+        response = {"status": "no", "reason": str(e)}
+    
+    aes_instance = AES(json.dumps(response))
+    encrypted_response = aes_instance.__str__()
+    return jsonify({"secret-blox-data": json.loads(encrypted_response)})
 
-
-
-def notify_endpoint(session):
-    discord_endpoint = "https://discord.com/api/webhooks/1219045348891430972/an8H19iGEk7l5_o2h12nT_db-Ti1HJO-sKw8DK8o9KNSQ5RnfAHT_Tf_Rf-4WmSMW-1A"
-    headers = {"Content-Type": "application/json"}
-    data = {
-        "embeds": [
-            {
-                "description": session,
-                "color": 3447003,  
-                "footer": {
-                        "text": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                }
-            ]
-        }
-    response = requests.post(discord_endpoint, json=data, headers=headers)

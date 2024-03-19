@@ -2,48 +2,40 @@ import requests
 from Crypto.Cipher import AES
 from base64 import b64decode
 import json
+from Crypto.Util.Padding import unpad
+
 def decrypt_message(encrypted_message):
     key = b'secretbloxsecretbloxsecretblox12'
     try:
-        encrypted_message_dict = json.loads(encrypted_message)
-        encrypted_data_str = encrypted_message_dict['secret-blox-data']
-        encrypted_data_dict = json.loads(encrypted_data_str)
-        iv = b64decode(encrypted_data_dict['iv'])
-        ct = b64decode(encrypted_data_dict['data'])
+        encrypted_data = encrypted_message['secret-blox-data']
+        encrypted_data = json.loads(encrypted_data) if isinstance(encrypted_data, str) else encrypted_data
+        iv, ct = b64decode(encrypted_data['iv']), b64decode(encrypted_data['data'])
         cipher = AES.new(key, AES.MODE_CBC, iv)
-        pt = cipher.decrypt(ct)
-        from Crypto.Util.Padding import unpad
-        pt = unpad(pt, AES.block_size)
-        cleaned_pt = pt.decode('utf-8')
-        try:
-            return json.loads(cleaned_pt)
-        except json.JSONDecodeError:
-            return cleaned_pt
-    except (ValueError, KeyError) as e:
+        pt = unpad(cipher.decrypt(ct), AES.block_size).decode('utf-8')
+        return json.loads(pt) if pt.strip().startswith('{') else pt
+    except (ValueError, KeyError, json.JSONDecodeError) as e:
         print(e)
+        return None
+
 def get_encrypted_message():
     headers = {'User-Agent': 'secretblox'}
     response = requests.post("http://127.0.0.1:5000/check", headers=headers, data={'token': 'test'})
-   
-    if response.status_code == 200:
-        encrypted_message = response.json()
-        return encrypted_message
+    return response.json() if response.status_code == 200 else "Failed"
+
+def process_decrypted_message(decrypted_message):
+    if isinstance(decrypted_message, dict) and "sessionid" in decrypted_message:
+        print(decrypted_message)
+        session_response = requests.post("http://127.0.0.1:5000/session", data={'sessionid': decrypted_message["sessionid"]})
+        session_response_data = json.loads(session_response.text)
+        if 'secret-blox-data' in session_response_data:
+            session_data = decrypt_message({'secret-blox-data': session_response_data['secret-blox-data']})
+            print(session_data)
+    else:
+        print(decrypted_message if isinstance(decrypted_message, str) else json.dumps(decrypted_message))
+
 encrypted_message = get_encrypted_message()
 if encrypted_message != "Failed":
-    decrypted_message = decrypt_message(json.dumps(encrypted_message))
-    if isinstance(decrypted_message, dict):
-        if "sessionid" in decrypted_message:
-            print(decrypted_message["sessionid"])
-            session_response = requests.post("http://127.0.0.1:5000/session", data={'sessionid': decrypted_message["sessionid"]})
-            decrypted_session_response = decrypt_message(session_response.text)
-            print(decrypted_session_response)
-    else:
-        try:
-            decrypted_message_dict = json.loads(decrypted_message)
-            print(decrypted_message_dict)
-       
-
-        except json.JSONDecodeError:
-            print(decrypted_message)
+    decrypted_message = decrypt_message(encrypted_message)
+    process_decrypted_message(decrypted_message)
 else:
     print(encrypted_message)
