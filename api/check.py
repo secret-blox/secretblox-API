@@ -7,15 +7,19 @@ from .database import connection
 from base64 import b64encode
 from .hashing.AES import AES
 from .discord.notfy import Notfy
-from dotenv import load_dotenv
-
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', 'sb.env'))
-sb_updating = os.getenv('SECRET_BLOX_FORCE_UPDATE')
 
 def check_token():
-    
-    if sb_updating == True:
-        response = {"status": "no", "reason": "updating"}
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT sb_update FROM info LIMIT 1")
+            sb_update_result = cursor.fetchone()
+            
+            if sb_update_result['sb_update'] == "true":
+                response = {"status": "no", "reason": "updating"}
+                encrypted_response = AES(json.dumps(response)).__str__()
+                return jsonify({"secret-blox-data": json.loads(encrypted_response)})
+    except Exception as e:
+        response = {"status": "no", "reason": "Error via SB DB"}
         encrypted_response = AES(json.dumps(response)).__str__()
         return jsonify({"secret-blox-data": json.loads(encrypted_response)})
     
